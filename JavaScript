@@ -1,0 +1,72 @@
+// ==UserScript==
+// @name         抖音直播后台依旧加载弹幕-摸鱼奎恩 | Douyin Live
+// @name:zh      抖音直播后台依旧加载弹幕-摸鱼奎恩 | Douyin Live
+// @name:en      Keep Douyin Live Chat Loading in Background
+// @namespace    http://tampermonkey.net/
+// @version      1.3
+// @description     直播间页面在后台时依旧能加载弹幕、去除挂机时的节能暂停播放并添加自动关闭节能弹窗功能
+// @description:en  Keep Douyin live stream comments loading even when the tab is in the background
+// @author       xero127
+// @match        *://*.douyin.com/*
+// @icon         https://p-pc-weboff.byteimg.com/tos-cn-i-9r5gewecjs/favicon.png
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_registerMenuCommand
+// @run-at       document-start
+// @license      MIT
+// ==/UserScript==
+
+(function() {
+    'use strict'; //严格模式
+
+    // 读取配置 (默认关闭)
+    const isWide = GM_getValue("isWide", false);
+    // 面板设置菜单 (点击即切换并刷新页面)
+    GM_registerMenuCommand(isWide ? "✅ 兼容增强: 已开启" : "❌ 兼容增强: 未开启", () => {
+        GM_setValue("isWide", !isWide);
+        location.reload();
+    });
+
+    // 判断是否启动脚本
+    if (!isWide && location.hostname !== "live.douyin.com") return;
+
+    // 劫持API 模块
+    const hijack = (p, v) => {
+        const desc = { get: () => v, configurable: true };
+        try { Object.defineProperty(Document.prototype, p, desc); }// 优先劫持原型链
+        catch { try { Object.defineProperty(document, p, desc); } catch (e) { console.error(`无法劫持属性: ${p}`, e); } }
+                                                                  // 劫持document失败则控制台打印错误
+    };
+    // 劫持当前 前后台状态
+    hijack('hidden', false);
+    hijack('visibilityState', 'visible');
+    hijack('webkitHidden', false);
+    // 拦截页面可见性状态变化事件
+    document.addEventListener('visibilitychange', e => e.stopImmediatePropagation(), true);
+    // 模拟渲染心跳
+    window.requestAnimationFrame = cb => setTimeout(() => cb(performance.now()), 16); // 1000/16≈60fps
+    window.cancelAnimationFrame = id => clearTimeout(id); //防泄漏
+    // 模拟活跃操作 (间隔60s)
+    setInterval(() => {
+        if (!document.activeElement || !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+            document.dispatchEvent(new Event('mousemove', { bubbles: true }));
+        }
+    }, 60000);
+
+    // 自动点击挂机暂停播放弹窗 模块
+    const autoClick = () => {
+        // 满足兄弟节点文本匹配
+        const xpath1 = "//div[normalize-space(.)='继续播放' and preceding-sibling::div[normalize-space(.)='使用客户端免弹窗']]";
+        const btn = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+        // 安全性检查
+        if (btn?.click) btn.click();
+    };
+    // 间隔3s
+    let timer;
+    const observer = new MutationObserver(() => {
+        if (timer) return;
+        timer = setTimeout(() => { timer = null; autoClick(); }, 3000);
+    });
+    // 开始监控弹窗动作
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+})();
