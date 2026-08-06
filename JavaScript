@@ -3,7 +3,7 @@
 // @name:zh      抖音直播后台依旧加载弹幕-摸鱼奎恩 | Douyin Live
 // @name:en      Keep Douyin Live Chat Loading in Background
 // @namespace    http://tampermonkey.net/
-// @version      1.7
+// @version      1.7.5
 // @description  直播间页面在后台时依旧能加载弹幕、去除挂机时的节能暂停播放。添加自动关闭节能弹窗、双直播平台同屏功能
 // @description:en  Enables background danmaku loading, disables idle power-saving pauses, auto-dismisses eco popups, and adds dual-platform split-screen viewing.
 // @author       xero127
@@ -100,7 +100,7 @@
                 'ld': '标清'
             };
 
-            //正则提取地址
+            // 提取推流源
             function extractDouyinStreams() {
                 let extracted = [];
                 try {
@@ -129,7 +129,41 @@
                     parseDict(/"flv_pull_url":\{([^}]+)\}/g, 'flv');
                     parseDict(/"hls_pull_url_map":\{([^}]+)\}/g, 'hls');
 
-                    const getQInfo = (url) => {
+                    // 补充解析 data 节点中的独立画质块
+                    const parseDataQualities = (format) => {
+                        const qualitiesKeys = ['origin', 'uhd', 'hd', 'sd', 'ld', 'md'];
+                        for (let qKey of qualitiesKeys) {
+                            let reg = new RegExp(`"${qKey}"\\s*:\\s*\\{([^}]+(?:\\{[^}]+\\}[^}]*)*)\\}`, 'g');
+                            let match;
+                            while ((match = reg.exec(cleanHtml)) !== null) {
+                                let block = match[1];
+                                let urlReg = /"(flv|hls)"\s*:\s*"([^"]+)"/g;
+                                let uMatch;
+                                while ((uMatch = urlReg.exec(block)) !== null) {
+                                    let fType = uMatch[1];
+                                    let fUrl = uMatch[2].replace(/\\u0026/g, '&');
+                                    if (fType === format && !urlMap[fUrl]) {
+                                        urlMap[fUrl] = { url: fUrl, format: format, key: qKey };
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    parseDataQualities('flv');
+                    parseDataQualities('hls');
+
+                    const getQInfo = (url, key) => {
+                        if (key === 'origin' || url.includes('_or')) {
+                            let origQ = qualities.find(q => q.sdk_key === 'origin');
+                            return {
+                                name: '原画',
+                                sdk_key: 'origin',
+                                // 如果官方没填码率，保持 0 ；如果以后官方填了真实码率，自动采用真实码率
+                                v_bit_rate: (origQ && origQ.v_bit_rate > 0) ? origQ.v_bit_rate : 0,
+                                fps: (origQ && origQ.fps > 0) ? origQ.fps : 60,
+                                resolution: (origQ && origQ.resolution) ? origQ.resolution : '1920x1080'
+                            };
+                        }
                         if (!qualities || qualities.length === 0) return null;
                         const sortedQ = [...qualities].sort((a, b) => b.sdk_key.length - a.sdk_key.length);
                         for (let q of sortedQ) {
@@ -142,27 +176,26 @@
 
                     let tempExtracted = Object.values(urlMap).map(item => {
                         let codec = (item.url.includes('hevc') || item.url.includes('bytevc1') || item.url.includes('h265') || item.url.includes('5.flv') || item.url.includes('5.m3u')) ? 'h265' : 'h264';
-                        let matchedQ = getQInfo(item.url);
+                        let matchedQ = getQInfo(item.url, item.key);
 
-																								   
+                        let isOrigin = (item.key === 'origin' || item.url.includes('_or') || (matchedQ && matchedQ.sdk_key === 'origin'));
+
                         let v_bit_rate = matchedQ ? matchedQ.v_bit_rate : 0;
-                        let fps = matchedQ ? matchedQ.fps : 0;
-                        let resolution = matchedQ ? matchedQ.resolution : '自动';
+                        let fps = matchedQ ? matchedQ.fps : (isOrigin ? 60 : 0);
+                        let resolution = matchedQ ? matchedQ.resolution : (isOrigin ? '1920x1080' : '自动');
                         
-                        // 获取当前流的分辨率高度 h
                         let h = 0;
                         if (resolution && resolution !== '自动') {
                             let resMatch = resolution.match(/x(\d+)/i);
                             if (resMatch) h = parseInt(resMatch[1], 10);
                         }
 
-                        let q = { sdk_key: matchedQ ? matchedQ.sdk_key : item.key };
+                        let q = { sdk_key: isOrigin ? 'origin' : (matchedQ ? matchedQ.sdk_key : item.key) };
                         let format = item.format;
-                        let currentQualityName = "未知";
 
-                        // 通过sdk_key或fps区分原画
-                        if (q.sdk_key === 'origin' || fps >= 60) {
-                            // 独立命名，防止与uhd(蓝光)去重时产生冲突
+                        // 画质名称评判逻辑
+                        let currentQualityName = "未知";
+                        if (isOrigin || q.sdk_key === 'origin' || fps >= 60) {
                             currentQualityName = "原画";  
                         } else if (h >= 1080) {
                             currentQualityName = "蓝光";
@@ -170,8 +203,10 @@
                             currentQualityName = "超清";
                         } else if (h >= 480) {
                             currentQualityName = "高清";
-                        } else {
+                        } else if (h > 0) {
                             currentQualityName = "标清";
+                        } else {
+                            currentQualityName = "未知";
                         }
 
                         return {
@@ -179,35 +214,37 @@
                             url: item.url,
                             format: format,
                             codec: codec,
-                            bitrate: v_bit_rate,
+                            bitrate: v_bit_rate, // 值为 0 时菜单自动显示“服务器未压缩”
                             fps: fps,
-                            resolution: resolution
+                            resolution: resolution,
+                            sdk_key: q.sdk_key
                         };
                     });
 
-                    // 生成uniqueKey并去重
-                    let deduplicatedMap = {};
-                    for (let s of tempExtracted) {
-                        let uniqueKey = `${s.name}_${s.format}_${s.codec}`;
-                        if (!deduplicatedMap[uniqueKey]) {
-                            deduplicatedMap[uniqueKey] = s;
-                        }
-                    }
-                    extracted = Object.values(deduplicatedMap);
+                    // 规则：不进行去重过滤，全量保留抓取到的所有不同源
+                    extracted = tempExtracted;
 
                 } catch(e) { console.error("解析流失败", e); }
 
-                // 对视频流进行优先级排序
+                // 排序规则：帧率优先 -> HLS排底 -> 源码率优先 -> H265>H264
                 extracted.sort((a, b) => {
-                    let aDisabled = (a.format === 'hls' && a.codec === 'h265') ? 1 : 0;
-                    let bDisabled = (b.format === 'hls' && b.codec === 'h265') ? 1 : 0;
-                    if (aDisabled !== bDisabled) return aDisabled - bDisabled;
-
+                    // 非HLS的所有流（包括 FLV、未知画质/admin流）全部排在 HLS 的上面
+                    let aIsHLS = (a.format === 'hls') ? 1 : 0;
+                    let bIsHLS = (b.format === 'hls') ? 1 : 0;
+                    if (aIsHLS !== bIsHLS) return aIsHLS - bIsHLS;
+                    // 帧率优先（60帧 > 45帧 > 30帧 > 未知0帧）
+                    if (b.fps !== a.fps) return b.fps - a.fps;
+                    // 码率优先：服务器未压缩 (bitrate == 0) 排在前面
+                    let aUncompressed = (a.bitrate === 0) ? 1 : 0;
+                    let bUncompressed = (b.bitrate === 0) ? 1 : 0;
+                    if (aUncompressed !== bUncompressed) return bUncompressed - aUncompressed;
                     if (b.bitrate !== a.bitrate) return b.bitrate - a.bitrate;
-                    if (a.format !== b.format) return a.format === 'flv' ? -1 : 1;
-                    if (a.codec !== b.codec) return a.codec === 'h265' ? -1 : 1;
+                    // 编码优先：H265 > H264
+                    let aIsH265 = (a.codec === 'h265') ? 1 : 0;
+                    let bIsH265 = (b.codec === 'h265') ? 1 : 0;
+                    if (aIsH265 !== bIsH265) return bIsH265 - aIsH265;
                     return 0;
-                });
+                    });
 
                 return extracted;
             }
@@ -539,7 +576,7 @@
                     <div class="dl-title"><span>B站实时状态监控</span></div>
                     <div class="dl-row">视频画质：<span id="si-bili-quality">-</span></div>
                     <div class="dl-row">分辨率/帧率：<span id="si-bili-res">-</span></div>
-                    <div class="dl-row">近20s平均码率：<span id="si-bili-bitrate" style="color:#00a1d6;font-weight:bold;">0.00 Mbps</span></div>
+                    <div class="dl-row">近10s平均码率：<span id="si-bili-bitrate" style="color:#00a1d6;font-weight:bold;">0.00 Mbps</span></div>
                     <div class="dl-row">缓冲区积压延迟：<span id="si-bili-latency" style="color:#f44336;font-weight:bold;">0.00 s</span></div>
                 </div>
 
@@ -547,7 +584,7 @@
                     <div class="dl-title"><span>抖音实时状态监控</span></div>
                     <div class="dl-row">视频画质：<span id="si-dy-quality">-</span></div>
                     <div class="dl-row">分辨率/帧率：<span id="si-dy-res">-</span></div>
-                    <div class="dl-row">近20s平均码率：<span id="si-dy-bitrate" style="color:#00a1d6;font-weight:bold;">0.00 Mbps</span></div>
+                    <div class="dl-row">近10s平均码率：<span id="si-dy-bitrate" style="color:#00a1d6;font-weight:bold;">0.00 Mbps</span></div>
                     <div class="dl-row">缓冲区积压延迟：<span id="si-dy-latency" style="color:#f44336;font-weight:bold;">0.00 s</span></div>
                 </div>
             `;
@@ -756,16 +793,20 @@
                             sel.innerHTML = '<option value="">等待目标抖音页面开启...</option>';
                         } else {
                             streams.forEach((s) => {
-                                const mbps = (s.bitrate / 1000000).toFixed(1);
+                                // 未写码率直接标注“服务器未压缩”
+                                const bitrateStr = s.bitrate > 0 ? `${(s.bitrate / 1000000).toFixed(1)}Mbps` : '服务器未二压';
+                                const fpsStr = s.fps > 0 ? `${s.fps}帧` : '未知';
+
                                 const opt = document.createElement('option');
                                 opt.value = JSON.stringify(s);
 
+                                // 所有 HLS 源统一打上警告标签
                                 let disabledTag = '';
-                                if (s.format === 'hls' && s.codec === 'h265') {
-                                    disabledTag = ' ❌ [不支持播放/黑屏]';
+                                if (s.format === 'hls') {
+                                    disabledTag = ' ❌ [不支持/黑屏]';
                                 }
 
-                                opt.innerText = `[${s.format.toUpperCase()}] ${s.name} - ${mbps}Mbps / ${s.fps}帧 / ${s.codec}${disabledTag}`;
+                                opt.innerText = `[${s.format.toUpperCase()}] ${s.name} - ${bitrateStr} / ${fpsStr} / ${s.codec}${disabledTag}`;
                                 sel.appendChild(opt);
                             });
                             if (curVal && Array.from(sel.options).some(o => o.value === curVal)) sel.value = curVal;
@@ -789,7 +830,7 @@
                         biliLastDecodedBytes = currentBytes;
                         biliLastDecodedTime = now;
                     }
-                    biliBpsHistory = biliBpsHistory.filter(x => now - x.t <= 20000); // 过滤超过20秒的历史数据
+                    biliBpsHistory = biliBpsHistory.filter(x => now - x.t <= 10000); // 过滤超过10秒的历史数据
                     if (biliBpsHistory.length > 0) {
                         let avgMbps = biliBpsHistory.reduce((sum, item) => sum + item.val, 0) / biliBpsHistory.length; // 得到平均码率
                         document.getElementById('si-bili-bitrate').innerText = `${avgMbps.toFixed(2)} Mbps`; // 保留两位小数显示在面板
@@ -833,7 +874,7 @@
                         dyLastDecodedTime = now;
                     }
 
-                    dyBpsHistory = dyBpsHistory.filter(x => now - x.t <= 20000);
+                    dyBpsHistory = dyBpsHistory.filter(x => now - x.t <= 10000);
                     if (dyBpsHistory.length > 0) {
                         let avgMbps = dyBpsHistory.reduce((sum, item) => sum + item.val, 0) / dyBpsHistory.length;
                         document.getElementById('si-dy-bitrate').innerText = `${avgMbps.toFixed(2)} Mbps`;
