@@ -518,9 +518,11 @@
     const compareStreamTypeAndCodec = (a, b) => {
         const formats = { flv: 0, lls: 1, hls: 2 };
         const codecs = { h264: 0, h265: 1 };
+        const qualityRank = stream => ({ '原画': 0, '蓝光': 1 }[String(stream.name || '').trim()] ?? 2);
         return ((formats[String(a.format || '').toLowerCase()] ?? 3) -
             (formats[String(b.format || '').toLowerCase()] ?? 3)) ||
-            ((codecs[normalizeCodecName(a.codec)] ?? 2) - (codecs[normalizeCodecName(b.codec)] ?? 2));
+            ((codecs[normalizeCodecName(a.codec)] ?? 2) - (codecs[normalizeCodecName(b.codec)] ?? 2)) ||
+            (qualityRank(a) - qualityRank(b));
     };
 
     // 隐藏B站小橙车提示浮窗
