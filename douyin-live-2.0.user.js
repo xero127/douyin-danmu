@@ -549,6 +549,8 @@
     // 只适配原生画面弹幕，不拦截官网消息接收和右侧评论栏。
     // rAF 在后台停帧时 manager 的时钟落后于消息时间，会算出超长动画和错误轨道。
     const patchedBiliDanmakuManagers = new WeakSet();
+    let biliNativeDanmakuEngine = null;
+    const nativeDouyinDanmakuIds = new Set();
     const installBiliDanmakuClockGuard = () => {
         const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
         const prototype = pageWindow.LiveDanmakuEngine?.default?.prototype;
@@ -557,6 +559,7 @@
         prototype.handleSocketMessage = function (...args) {
             try {
                 const core = this.danmaku?.core;
+                if (core && typeof this.userSendDanmaku === 'function') biliNativeDanmakuEngine = this;
                 const manager = core?.manager;
                 if (manager && !patchedBiliDanmakuManagers.has(manager) &&
                     typeof manager.add === 'function' &&
@@ -565,6 +568,8 @@
                     manager.add = function (...items) {
                         // 仅跳过后台不可见的画面插入；不改正在滚动的节点，也不关弹幕开关。
                         if (isPageReallyHidden()) return;
+                        const id = String(items[0]?.dmid || '');
+                        if (id.startsWith('dual-live-douyin:') && !nativeDouyinDanmakuIds.has(id)) return;
                         try {
                             if (core.isRunning) {
                                 core.timeController.updateTime();
@@ -1751,9 +1756,9 @@
             if (keepAtBottom && scrollArea) scrollArea.scrollTop = scrollArea.scrollHeight;
         };
 
-        // 仅关闭弹幕、切换房间等原有清理流程调用；切屏及尺寸变化不调用。
-        const resetScrollingDanmaku = () => {
-            douyinDanmakuQueue.length = 0;
+        const nativeDouyinDanmakuEntries = new Map();
+        let nativeDouyinDanmakuSequence = 0;
+        const clearOwnDanmakuAnimations = () => {
             for (const node of Array.from(activeDanmakuNodes)) {
                 const animation = node._dlAnimation;
                 if (animation) {
@@ -1764,6 +1769,16 @@
                 }
                 recycleDanmakuNode(node);
             }
+        };
+        // 只清理脚本自己的抖音弹幕，不清空 B 站原生弹幕。
+        const resetScrollingDanmaku = () => {
+            douyinDanmakuQueue.length = 0;
+            clearOwnDanmakuAnimations();
+            for (const [id, entry] of nativeDouyinDanmakuEntries) {
+                nativeDouyinDanmakuIds.delete(id);
+                try { entry.core.remove(id); } catch (error) {}
+            }
+            nativeDouyinDanmakuEntries.clear();
         };
 
         const clearDanmakuDisplay = () => {
@@ -1798,6 +1813,32 @@
             const cutoff = performance.now() - MAX_DANMAKU_AGE_MS;
             while (douyinDanmakuQueue.length && douyinDanmakuQueue[0].queuedAt < cutoff) douyinDanmakuQueue.shift();
             if (!douyinDanmakuQueue.length) return;
+            const engine = biliNativeDanmakuEngine;
+            if (engine && !engine.danmaku?.destroyed) {
+                const core = engine.danmaku?.core;
+                if (!core?.visible || !core.isRunning) return;
+                // 和 B 站评论共用同一个碰撞池、轨道、速度、字号及显示范围。
+                // 这里调用的是本地渲染引擎的方法，不是播放器的联网发言接口。
+                clearOwnDanmakuAnimations();
+                const now = performance.now();
+                for (const [id, entry] of nativeDouyinDanmakuEntries) {
+                    if (now > entry.expiresAt) { nativeDouyinDanmakuEntries.delete(id); nativeDouyinDanmakuIds.delete(id); }
+                }
+                const item = douyinDanmakuQueue.shift();
+                const id = `dual-live-douyin:${Date.now()}:${++nativeDouyinDanmakuSequence}`;
+                nativeDouyinDanmakuIds.add(id);
+                nativeDouyinDanmakuEntries.set(id, { core, expiresAt: now + 60000 });
+                try {
+                    engine.userSendDanmaku({ msg: item.content, mode: 1, fontsize: 25, color: 16777215,
+                        isMaster: false, modeInfo: { extra: JSON.stringify({ id_str: id }) } });
+                } catch (error) {
+                    nativeDouyinDanmakuIds.delete(id);
+                    nativeDouyinDanmakuEntries.delete(id);
+                }
+                return;
+            }
+            // 原生层已经存在但引擎尚未就绪时等待，不并行绘制另一套轨道。
+            if (document.querySelector('.web-player-danmaku,.bpx-player-danmaku,.fullscreen-danmaku-container')) return;
             const layer = ensureDanmakuLayer();
             if (!layer || layer.style.display === 'none' || layer.clientWidth <= 0 || layer.clientHeight <= 0) return;
 
