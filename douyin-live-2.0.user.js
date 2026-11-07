@@ -2469,7 +2469,7 @@
                     <div class="dl-title">
                         <span>抖音推流源选择</span>
                         <span style="display:flex; gap:4px; align-items:center;">
-                            <button class="dl-btn" id="btn-detect-lls" style="padding: 2px 5px; font-size:10px; background:#6b7fd7;">🔍 测试可用性</button>
+                            <button class="dl-btn" id="btn-detect-lls" title="逐条测试全部 LLS，以及参数未知的 HLS / FLV。&#10;补充实测参数，失败源标记 ❌，不会切换当前播放源。&#10;测试会短时拉流；通过不保证长期稳定、声音或音画同步正常。" style="padding: 2px 5px; font-size:10px; background:#6b7fd7;">🔍 测试可用性</button>
                             <button class="dl-btn" id="btn-refresh-streams" style="padding: 2px 5px; font-size:10px; background:#4f9be8;">🔄 手动清除缓存</button>
                         </span>
                     </div>
