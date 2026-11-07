@@ -2596,7 +2596,7 @@
             const trigger = document.getElementById('dl-stream-trigger');
             if (!select || !popup || !trigger) return;
             trigger.textContent = select.selectedOptions[0]?.textContent || '等待播放源...';
-            trigger.title = trigger.textContent;
+            trigger.removeAttribute('title');
             const scrollTop = popup.scrollTop;
             const focusedValue = popup.contains(document.activeElement) ? document.activeElement.dataset.value : null;
             popup.replaceChildren();
@@ -2638,7 +2638,7 @@
                 row.setAttribute('aria-label', option.textContent);
                 row.dataset.value = option.value;
                 row.textContent = option.textContent;
-                row.title = option.title || option.textContent;
+                row.title = option.title;
                 row.addEventListener('click', () => {
                     select.value = option.value;
                     closeStreamPicker(true);
