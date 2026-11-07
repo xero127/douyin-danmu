@@ -2063,6 +2063,7 @@
                     panel.style.display = 'block';
                 } else {
                     panel.style.display = 'none';
+                    closeStreamPicker();
                 }
             }
         });
@@ -2104,6 +2105,29 @@
                 .dl-recovery-history-host:focus-within #dl-auto-recover-history { display:block; }
                 .dl-status-red { color:#f44336; font-weight:bold; }
                 select.dl-input { width: 100%; margin-top:5px; outline:none; }
+                #dy-stream-select { display:none; }
+                .dl-stream-trigger { width:100%; box-sizing:border-box; margin-top:5px; padding:3px 24px 3px 5px; position:relative;
+                    background:#111; color:#fff; border:1px solid #555; border-radius:3px; text-align:left;
+                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; font:inherit; }
+                .dl-stream-trigger::after { content:'▾'; position:absolute; right:10px; color:#aaa; }
+                #dl-stream-popup { position:fixed; z-index:1000000; overflow-y:auto; overscroll-behavior:contain;
+                    box-sizing:border-box; background:#111; color:#fff; border:1px solid #777;
+                    border-radius:0; padding:0; scrollbar-width:auto; }
+                #dl-stream-popup[hidden] { display:none; }
+                .dl-stream-heading { color:#aaa; background:transparent; padding:6px 5px; margin:0;
+                    font:13px/1.5 Arial,Microsoft YaHei,sans-serif; white-space:pre-line; }
+                .dl-stream-codec-group { display:grid; grid-template-columns:minmax(0,1fr) 25px; }
+                .dl-stream-option { display:block; width:100%; box-sizing:border-box; border:0; border-radius:0;
+                    padding:6px 5px; background:transparent; color:#fff; cursor:pointer; text-align:left;
+                    font:14px/1.6 Arial,Microsoft YaHei,sans-serif; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+                .dl-stream-option:hover,.dl-stream-option:focus-visible,
+                .dl-stream-option[aria-selected="true"] { background:#9ecbff; color:#192c40; outline:none; box-shadow:none; }
+                .dl-stream-codec-rail { display:flex; flex-direction:column; align-items:center; gap:10px;
+                    padding:10px 0; color:#aaa; background:#111; }
+                .dl-stream-codec-rail::before,.dl-stream-codec-rail::after { content:''; width:1px;
+                    min-height:8px; flex:1; background:currentColor; opacity:.35; }
+                .dl-stream-codec-rail span { writing-mode:vertical-rl; text-orientation:upright;
+                    font:12px/1 Consolas,monospace; letter-spacing:3px; }
                 input[type=range] { width: 100px; vertical-align: middle; }
 
                 .dl-source-label-host { position: relative !important; }
@@ -2411,6 +2435,9 @@
                     <select class="dl-input" id="dy-stream-select">
                         <option value="">等待嗅探数据...</option>
                     </select>
+                    <button type="button" id="dl-stream-trigger" class="dl-stream-trigger" aria-haspopup="listbox"
+                        aria-controls="dl-stream-popup" aria-expanded="false">等待嗅探数据...</button>
+                    <div id="dl-stream-popup" role="listbox" aria-label="抖音播放源" hidden></div>
                     <div style="margin-top:8px;">
                         <button class="dl-btn" id="btn-play-dy" style="width:100%;">▶ 载入并在B站同屏播放</button>
                     </div>
@@ -2469,6 +2496,7 @@
             `;
             document.body.appendChild(panel);
             attachEventListeners(panel);
+            initStreamPicker();
             renderAutoRecoveryHistory();
             startHeartbeat();
             isUIBuilt = true;
@@ -2511,6 +2539,142 @@
             dySourceLabel.style.display = showDy ? 'block' : 'none';
             biliSourceLabel.style.top = '6px';
             dySourceLabel.style.top = showBili && showDy ? 'calc(50% + 6px)' : '6px';
+        };
+
+        const closeStreamPicker = (focusTrigger = false) => {
+            const popup = document.getElementById('dl-stream-popup');
+            const trigger = document.getElementById('dl-stream-trigger');
+            if (popup) popup.hidden = true;
+            trigger?.setAttribute('aria-expanded', 'false');
+            if (focusTrigger) trigger?.focus();
+        };
+
+        const renderStreamPicker = () => {
+            const select = document.getElementById('dy-stream-select');
+            const popup = document.getElementById('dl-stream-popup');
+            const trigger = document.getElementById('dl-stream-trigger');
+            if (!select || !popup || !trigger) return;
+            trigger.textContent = select.selectedOptions[0]?.textContent || '等待播放源...';
+            trigger.title = trigger.textContent;
+            const scrollTop = popup.scrollTop;
+            const focusedValue = popup.contains(document.activeElement) ? document.activeElement.dataset.value : null;
+            popup.replaceChildren();
+            let group = null, previousKey = '';
+            for (const option of select.options) {
+                if (option.disabled || !option.value) {
+                    const heading = document.createElement('div');
+                    heading.className = 'dl-stream-heading';
+                    heading.textContent = option.textContent;
+                    popup.appendChild(heading);
+                    group = null;
+                    previousKey = '';
+                    continue;
+                }
+                let stream;
+                try { stream = JSON.parse(option.value); } catch (error) { continue; }
+                const codec = normalizeCodecName(stream.codec) || 'unknown';
+                const key = `${stream.format}:${codec}`;
+                if (!group || key !== previousKey) {
+                    const section = document.createElement('div');
+                    section.className = 'dl-stream-codec-group';
+                    group = document.createElement('div');
+                    const rail = document.createElement('div');
+                    rail.className = 'dl-stream-codec-rail';
+                    rail.dataset.codec = codec;
+                    rail.setAttribute('aria-hidden', 'true');
+                    const label = document.createElement('span');
+                    label.textContent = codec === 'unknown' ? '未知' : codec.toUpperCase();
+                    rail.appendChild(label);
+                    section.append(group, rail);
+                    popup.appendChild(section);
+                    previousKey = key;
+                }
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'dl-stream-option';
+                row.setAttribute('role', 'option');
+                row.setAttribute('aria-selected', String(option.selected));
+                row.setAttribute('aria-label', option.textContent);
+                row.dataset.value = option.value;
+                row.textContent = option.textContent;
+                row.title = option.title || option.textContent;
+                row.addEventListener('click', () => {
+                    select.value = option.value;
+                    closeStreamPicker(true);
+                    select.dispatchEvent(new Event('change', { bubbles: true }));
+                });
+                group.appendChild(row);
+            }
+            popup.scrollTop = scrollTop;
+            if (focusedValue) Array.from(popup.querySelectorAll('.dl-stream-option'))
+                .find(row => row.dataset.value === focusedValue)?.focus({ preventScroll: true });
+        };
+
+        const initStreamPicker = () => {
+            const trigger = document.getElementById('dl-stream-trigger');
+            const popup = document.querySelector('#dual-live-panel #dl-stream-popup');
+            const select = document.getElementById('dy-stream-select');
+            // 面板的 backdrop-filter 会成为 fixed 定位的包含块，弹层直接挂 body 避免双重偏移。
+            document.querySelectorAll('#dl-stream-popup').forEach(other => { if (other !== popup) other.remove(); });
+            document.body.appendChild(popup);
+            const open = (last = false) => {
+                renderStreamPicker();
+                const rect = trigger.getBoundingClientRect();
+                let width = Math.min(rect.width, window.innerWidth - 16);
+                const below = window.innerHeight - rect.bottom;
+                const above = rect.top;
+                const useBelow = below >= Math.min(220, above);
+                const height = Math.max(80, Math.min(440, (useBelow ? below : above) - 12));
+                popup.style.width = `${width}px`;
+                popup.style.maxHeight = `${height}px`;
+                popup.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
+                popup.style.top = `${useBelow ? rect.bottom + 4 : Math.max(8, rect.top - height - 4)}px`;
+                popup.hidden = false;
+                trigger.setAttribute('aria-expanded', 'true');
+                const rows = Array.from(popup.querySelectorAll('.dl-stream-option'));
+                // 像原生列表一样，只为容纳完整文字补足必要宽度，不固定加宽。
+                const overflow = Math.max(0, ...rows.map(row => row.scrollWidth - row.clientWidth));
+                if (overflow > 0) {
+                    width = Math.min(width + overflow + 2, window.innerWidth - 16);
+                    popup.style.width = `${width}px`;
+                    popup.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
+                }
+                const row = rows.find(row => row.getAttribute('aria-selected') === 'true') || (last ? rows.at(-1) : rows[0]);
+                row?.focus({ preventScroll: true });
+                row?.scrollIntoView({ block: 'nearest' });
+            };
+            trigger.addEventListener('click', () => popup.hidden ? open() : closeStreamPicker());
+            trigger.addEventListener('keydown', event => {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    open(event.key === 'ArrowUp');
+                }
+            });
+            popup.addEventListener('keydown', event => {
+                const rows = Array.from(popup.querySelectorAll('.dl-stream-option'));
+                const index = rows.indexOf(document.activeElement);
+                let next;
+                if (event.key === 'ArrowDown') next = Math.min(rows.length - 1, index + 1);
+                if (event.key === 'ArrowUp') next = Math.max(0, index - 1);
+                if (event.key === 'Home') next = 0;
+                if (event.key === 'End') next = rows.length - 1;
+                if (next !== undefined) { event.preventDefault(); rows[next]?.focus(); }
+                if ((event.key === 'Enter' || event.key === ' ') && index >= 0) {
+                    event.preventDefault();
+                    rows[index].click();
+                }
+                if (event.key === 'Escape') { event.preventDefault(); closeStreamPicker(true); }
+                if (event.key === 'Tab') closeStreamPicker();
+            });
+            document.addEventListener('pointerdown', event => {
+                if (!trigger.contains(event.target) && !popup.contains(event.target)) closeStreamPicker();
+            }, true);
+            document.addEventListener('keydown', event => {
+                if (event.key === 'Escape' && !popup.hidden) closeStreamPicker(true);
+            });
+            window.addEventListener('resize', () => closeStreamPicker());
+            select.addEventListener('change', renderStreamPicker);
+            renderStreamPicker();
         };
 
         const getStreamKey = (stream) => `${String(stream?.format || '')}:${String(stream?.url || '')}`;
@@ -2558,6 +2722,7 @@
 
             if (streams.length === 0) {
                 sel.innerHTML = '<option value="">等待目标抖音页面开启...</option>';
+                renderStreamPicker();
                 return;
             }
 
@@ -2623,6 +2788,7 @@
             if (curVal && Array.from(sel.options).some(option => option.value === curVal)) {
                 sel.value = curVal;
             }
+            renderStreamPicker();
         };
 
         const markStreamUnplayable = (stream, reason = '') => {
@@ -3142,6 +3308,7 @@
                 ensureDouyinChat();
                 const sel = document.getElementById('dy-stream-select');
                 if (sel) sel.innerHTML = '<option value="">🔄 正在重新嗅探源...</option>';
+                renderStreamPicker();
                 lastRenderedStreamsJson = '';
                 GM_setValue('DY_FORCE_EXTRACT', Date.now());
 

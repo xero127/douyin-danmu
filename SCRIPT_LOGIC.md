@@ -116,7 +116,11 @@ GM 数据可能包含带签名的播放地址和 WSS 参数。代码不把这些
 
 ### 5.1 下拉框显示
 
-`getCurrentDouyinStreams` 按目标抖音房间取缓存。`renderDouyinStreamOptions` 用数据和测试结果生成签名，无变化就不重建；用户正在操作下拉框时暂不更新，减少选项跳动。
+`getCurrentDouyinStreams` 按目标抖音房间取缓存。`renderDouyinStreamOptions` 用数据和测试结果生成签名，无变化就不重建。原生 select 隐藏保留，继续作为测试、播放和选中值的数据接口；`renderStreamPicker` 将其映射成自定义下拉面板，更新时保留滚动位置和焦点选项。
+
+沿用原列表的黑底、完整源名称和浅蓝选中条，不增加彩色分组卡片或固定加宽。只在每段编码源右侧保留灰色竖排 H264/H265 与上下细线，未知编码单独显示。每行继续显示类型、名称、码率、分辨率、帧率、编码与失败叉号；触发按钮、无障碍名称和悬停提示也保留完整信息。
+
+面板按视口选择向上或向下展开，可滚动；方向键/Home/End 移动焦点，Enter/空格选择，Escape、Tab、点击外部或调整窗口关闭。选择只更新选中值，仍需点击“载入并在B站同屏播放”才切源。它不另外添加源探测或媒体请求；选择逻辑仍以同一 select 为准。
 
 分组说明是禁用的 option：
 
@@ -417,7 +421,7 @@ LLS iframe 包装 RTCPeerConnection 构造器收集当前连接，每秒 getStat
 | 抖音采集与恢复 | `extractDouyinStreams`、`tryPushStreams`、`getDouyinNativeVideo`、`saveDouyinMediaState`、`checkDouyinNativeRecovery`、`handleDouyinRefreshRequest`、`reloadPageForRecovery` |
 | B 站定位与恢复 | `getBiliVideoCandidates`、`isBiliVideoVisible`、`getBiliVideo`、`getActiveBiliVideo`、`hasBiliPlayerErrorPanel`、`softReloadBiliPlayer`、`tryRecoverBiliPlayer`、`checkBiliAutoRecovery` |
 | 面板 | `initUI`、`attachEventListeners`、`startHeartbeat`、`setAutoRecoverStatus`、`recordAutoRecovery`、`renderAutoRecoveryHistory`、`dismissBiliQualityLoginBanner` |
-| 源显示与测试 | `getStreamKey`、`getCurrentDouyinStreams`、`renderDouyinStreamOptions`、`markStreamPlayable/Unplayable`、`probeLlsStream`、`probeMediaStream`、`probeStream`、`shouldProbeStream`、`runStreamAvailabilityCheck` |
+| 源显示与测试 | `compareStreamTypeAndCodec`、`getStreamKey`、`getCurrentDouyinStreams`、`renderDouyinStreamOptions`、`initStreamPicker`、`renderStreamPicker`、`closeStreamPicker`、`markStreamPlayable/Unplayable`、`probeLlsStream`、`probeMediaStream`、`probeStream`、`shouldProbeStream`、`runStreamAvailabilityCheck` |
 | 正式播放与恢复 | `initPlayer`、`resetOverlayRecovery`、`requestDouyinSourceRefresh`、`scheduleOverlayRecoverySoon`、`recoverCurrentPlayback`、`handlePlaybackResume` |
 | 弹幕作用域与显示 | `ensureDouyinChat`、`stopDouyinChat`、`syncDanmakuRoomScope`、`primeLatestDanmakuBatch`、`getDanmakuBatchKey`、`rememberBatchKey`、`consumeDanmakuBatch`、`ensureDanmakuLayer`、`updateDanmakuLayer`、`launchNextDanmaku`、`resetScrollingDanmaku`、`clearDanmakuDisplay`、`recycleDanmakuNode` |
 | 评论栏 | `findBiliChatList`、`createSidebarDanmakuNode`、`ensureBiliSidebarFeed`、`appendBiliSidebarDanmaku` |
