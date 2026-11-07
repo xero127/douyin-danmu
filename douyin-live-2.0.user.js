@@ -23,7 +23,7 @@
 // @license      MIT
 // ==/UserScript==
 
-// 2.0 整合：保留后台保护与B站原生弹幕恢复，抖音弹幕按实际位置分配轨道。
+// 2.0 修复：切换页面不清空B站弹幕，保留后台保护并同步原生弹幕时钟。
 // 1.9 修复：脚本追加的抖音音量按钮在 B 站播放器控制栏自动隐藏后仍常驻画面。
 // 1.8.1 修复：分屏模式下进出全屏 / 从全屏游戏切回浏览器后，B 站播放器重建 video
 // 或替换播放器容器导致分屏错位（B 站画面仍占满全屏、抖音画面压在下半屏）。
@@ -76,7 +76,7 @@
 
     // 断流自动恢复开关。B 站页与抖音页共用同一个 GM 配置。
     const AUTO_RECOVER_ENABLED_KEY = 'AUTO_RECOVER_ENABLED';
-    const isAutoRecoverEnabled = () => GM_getValue(AUTO_RECOVER_ENABLED_KEY, true) !== false;
+    const isAutoRecoverEnabled = () => GM_getValue(AUTO_RECOVER_ENABLED_KEY, false) === true;
 
     // 抖音原生页面没有可安全调用的播放器重载接口，只能在确认停滞后刷新页面。
     // 用 sessionStorage 限制刷新频率并做逐次退避，避免主播长时间离线时无限刷新。
@@ -525,43 +525,62 @@
     const nativeHiddenGetter = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden')?.get;
     const isPageReallyHidden = () => nativeHiddenGetter ? nativeHiddenGetter.call(document) : document.hidden;
 
-    // 保留后台播放保护，只在真实切回前台时释放原生弹幕的旧轨道。
+    // 保留后台保护；真实前台通知仍交给播放器，但切换页面不清空原生弹幕。
     const installPageVisibilityGuard = () => {
-        let wasHidden = isPageReallyHidden();
-        const resetBiliDanmaku = () => {
-            if (!IS_BILI) return;
-            try {
-                const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-                const player = pageWindow.EmbedPlayer?.instance;
-                // 第二个参数 false：不写入用户设置；已关闭弹幕时保持关闭。
-                if (typeof player?.updateDMSetting !== 'function' ||
-                    player.getPlayerInfo?.()?.danmaku?.display !== true) return;
-                try {
-                    player.updateDMSetting({ display: false }, false);
-                } finally {
-                    player.updateDMSetting({ display: true }, false);
-                }
-            } catch (error) {
-                console.warn('[DualLive] 原生弹幕轨道恢复失败:', error);
-            }
-        };
         try { Object.defineProperty(document, 'hidden', { value: false, writable: false }); } catch (e) {}
         try { Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: false }); } catch (e) {}
         window.addEventListener('visibilitychange', e => {
-            const hidden = isPageReallyHidden();
-            if (wasHidden && !hidden && IS_BILI) {
-                resetBiliDanmaku();
-                // 首帧先让原生动画时钟追上真实时间，再释放这一帧排入的旧轨道。
-                window.requestAnimationFrame(resetBiliDanmaku);
-            }
-            wasHidden = hidden;
-            // 后台事件继续拦截；真实回到前台则让播放器及脚本收到恢复通知。
-            if (hidden || !IS_BILI) e.stopImmediatePropagation();
+            if (isPageReallyHidden() || !IS_BILI) e.stopImmediatePropagation();
         }, true);
         window.addEventListener('blur', e => e.stopImmediatePropagation(), true);
     };
 
     if (IS_BILI || IS_DOUYIN) installPageVisibilityGuard();
+
+    // 只适配原生画面弹幕，不拦截官网消息接收和右侧评论栏。
+    // rAF 在后台停帧时 manager 的时钟落后于消息时间，会算出超长动画和错误轨道。
+    const patchedBiliDanmakuManagers = new WeakSet();
+    const installBiliDanmakuClockGuard = () => {
+        const pageWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+        const prototype = pageWindow.LiveDanmakuEngine?.default?.prototype;
+        if (typeof prototype?.handleSocketMessage !== 'function') return false;
+        const handleSocketMessage = prototype.handleSocketMessage;
+        prototype.handleSocketMessage = function (...args) {
+            try {
+                const core = this.danmaku?.core;
+                const manager = core?.manager;
+                if (manager && !patchedBiliDanmakuManagers.has(manager) &&
+                    typeof manager.add === 'function' &&
+                    typeof core.timeController?.updateTime === 'function') {
+                    const add = manager.add;
+                    manager.add = function (...items) {
+                        // 仅跳过后台不可见的画面插入；不改正在滚动的节点，也不关弹幕开关。
+                        if (isPageReallyHidden()) return;
+                        try {
+                            if (core.isRunning) {
+                                core.timeController.updateTime();
+                                const renderTime = core.renderTime, currentTime = core.currentTime;
+                                if (Number.isFinite(renderTime) && Number.isFinite(currentTime)) {
+                                    this.renderTime = renderTime;
+                                    this.currentTime = currentTime;
+                                }
+                            }
+                        } catch (error) { /* 站点改版时回退原生处理。 */ }
+                        return add.apply(this, items);
+                    };
+                    patchedBiliDanmakuManagers.add(manager);
+                }
+            } catch (error) { /* 不让可选的适配阻断官网弹幕。 */ }
+            return handleSocketMessage.apply(this, args);
+        };
+        return true;
+    };
+    if (IS_BILI && !installBiliDanmakuClockGuard()) {
+        let attempts = 0;
+        const attachTimer = window.setInterval(() => {
+            if (installBiliDanmakuClockGuard() || ++attempts >= 120) clearInterval(attachTimer);
+        }, 250);
+    }
 
 
     if (IS_DOUYIN) {
@@ -1111,6 +1130,24 @@
             return active || null;
         };
 
+        const autoRecoveryPageStartedAt = Date.now();
+        const autoRecoveryHistory = [];
+        const renderAutoRecoveryHistory = () => {
+            const el = document.getElementById('dl-auto-recover-history');
+            if (!el) return;
+            const timeText = time => new Date(time).toLocaleTimeString('zh-CN', { hour12: false });
+            const heading = `本页自动恢复记录（打开于 ${timeText(autoRecoveryPageStartedAt)}）`;
+            el.textContent = autoRecoveryHistory.length
+                ? heading + '\n' + autoRecoveryHistory.slice().reverse().map(item =>
+                    `${timeText(item.time)}｜${item.target}\n原因：${item.reason}\n操作：${item.result}`
+                ).join('\n\n')
+                : heading + '\n暂无自动重载或重连记录';
+        };
+        const recordAutoRecovery = (target, reason, result) => {
+            autoRecoveryHistory.push({ time: Date.now(), target, reason: String(reason || '未提供原因'), result });
+            renderAutoRecoveryHistory();
+        };
+
         const setAutoRecoverStatus = (text, color = '#aaa') => {
             const el = document.getElementById('st-auto-recover');
             if (!el) return;
@@ -1173,6 +1210,7 @@
                 return;
             }
             if (softReloadBiliPlayer(reason)) {
+                recordAutoRecovery('B站', reason, '已发起播放器重载');
                 biliAutoReloadCount++;
                 biliAutoNextReloadAt = now + Math.min(60000, 12000 * Math.pow(1.7, biliAutoReloadCount - 1));
                 biliAutoLastProgressAt = now;
@@ -1180,6 +1218,7 @@
                 biliAutoErrorSince = 0;
                 setAutoRecoverStatus(`已重载播放器（第${biliAutoReloadCount}次）`, '#ffb74d');
             } else {
+                recordAutoRecovery('B站', reason, '未能调用播放器重载，请手动刷新');
                 biliAutoNextReloadAt = now + 60000;
                 setAutoRecoverStatus('无法自动重载，请手动刷新', '#f44336');
             }
@@ -2056,6 +2095,16 @@
                 .dl-btn-danger { background:#e84f4f; }
                 .dl-btn-save { background:#4caf50; }
                 .dl-status-green { color:#4caf50; font-weight:bold; }
+                .dl-recovery-history-host { position:relative; cursor:help; }
+                #dl-auto-recover-history {
+                    display:none; position:absolute; right:0; top:100%; width:310px;
+                    max-width:80vw; max-height:240px; overflow-y:auto; box-sizing:border-box;
+                    padding:10px; color:#ddd; background:#111; border:1px solid #555;
+                    border-radius:4px; font:12px/1.6 Microsoft YaHei,sans-serif;
+                    white-space:pre-wrap; overflow-wrap:anywhere; z-index:10;
+                }
+                .dl-recovery-history-host:hover #dl-auto-recover-history,
+                .dl-recovery-history-host:focus-within #dl-auto-recover-history { display:block; }
                 .dl-status-red { color:#f44336; font-weight:bold; }
                 select.dl-input { width: 100%; margin-top:5px; outline:none; }
                 input[type=range] { width: 100px; vertical-align: middle; }
@@ -2386,7 +2435,10 @@
                         <label for="chk-auto-recover" style="cursor:pointer; user-select:none;" title="B站画面停住时软重载播放器；抖音源失效时自动重连或刷新源页面">
                             <input type="checkbox" id="chk-auto-recover" ${isAutoRecoverEnabled() ? 'checked' : ''}> 断流自动恢复
                         </label>
-                        <span id="st-auto-recover" style="color:#4caf50;">监测中</span>
+                        <span class="dl-recovery-history-host" tabindex="0" aria-label="查看本页自动恢复记录">
+                            <span id="st-auto-recover" style="color:${isAutoRecoverEnabled() ? '#4caf50' : '#888'};">${isAutoRecoverEnabled() ? '监测中' : '已关闭'}</span>
+                            <span id="dl-auto-recover-history" role="tooltip"></span>
+                        </span>
                     </div>
                     <div class="dl-row">
                         手动增加延迟:
@@ -2420,6 +2472,7 @@
             `;
             document.body.appendChild(panel);
             attachEventListeners(panel);
+            renderAutoRecoveryHistory();
             startHeartbeat();
             isUIBuilt = true;
             updateSourceLabels();
@@ -3251,6 +3304,7 @@
             // 即使抖音页暂时不能刷新，也先强制它重新抓一次源。
             GM_setValue('DY_FORCE_EXTRACT', Date.now());
             setAutoRecoverStatus('请求抖音页面刷新源…', '#ffb74d');
+            recordAutoRecovery('抖音源页面', reason, '已发送刷新请求，尚未确认页面执行');
             console.warn('[DualLive] 抖音源持续失败，已请求抖音页面刷新:', reason);
             return true;
         };
@@ -3285,6 +3339,7 @@
             setAutoRecoverStatus(`重连抖音画面（第${overlayRecoveryAttempts}次）…`, '#ffb74d');
 
             if (overlayRecoveryAttempts >= 3) requestDouyinSourceRefresh(reason);
+            recordAutoRecovery('抖音画面', reason, '已发起当前线路重连');
             initPlayer(currentStream, true);
         };
 

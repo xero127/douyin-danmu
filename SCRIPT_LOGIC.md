@@ -60,7 +60,7 @@ LLS 是此脚本接入的 RTM/SDP 播放路径，不等同于 LL-HLS；HLS 的 `
 | `DY_DANMAKU_BATCH` | 抖音 / B 站 | 最新一批普通评论：房间、来源、时间、会话、序号、items；不是历史消息库 |
 | `SHOW_SOURCE_LABELS` | B 站面板 / B 站页 | “显示来源”，未设置时为 `false` |
 | `SHOW_DOUYIN_DANMAKU` | B 站面板 / B 站页 | “显示抖音弹幕”，未设置时为 `false` |
-| `AUTO_RECOVER_ENABLED` | B 站面板 / 两站 | “断流自动恢复”，未设置时启用 |
+| `AUTO_RECOVER_ENABLED` | B 站面板 / 两站 | “断流自动恢复”，未设置时关闭；保留已保存的用户选择 |
 
 除已注册的变更监听外，B 站还有 800 ms 的批次补读，补偿漏掉的通知。重复通知由批次与消息两级去重拦截。开关会保留上次选择；“默认关闭”不代表强制覆盖已有保存值。
 
@@ -235,18 +235,18 @@ GM 数据可能包含带签名的播放地址和 WSS 参数。代码不把这些
 
 脚本伪装的是页面 API，不能取消浏览器/操作系统真正的标签页丢弃、冻结、休眠或 rAF 节流，也不能保证平台永远不调整画质。它没有锁定画质或自行切到最高档位的逻辑。
 
-### 9.2 切回 B 站的恢复
+### 9.2 B 站原生弹幕时钟适配：切页不清屏
 
-真实后台切回前台时，让 B 站的可见性恢复通知通过，并在原生弹幕确实开启时调用：
+真实后台切回前台时，让 B 站的可见性恢复通知通过。**不再临时开关原生弹幕，也不清空正在滚动的节点**。此前使用关闭/开启来释放旧轨道，会让正常切换时的弹幕一起消失，已移除。
 
-```javascript
-player.updateDMSetting({ display: false }, false);
-player.updateDMSetting({ display: true }, false);
-```
+`installBiliDanmakuClockGuard` 为页面导出的 `LiveDanmakuEngine.default.prototype.handleSocketMessage` 增加轻量适配：保留原消息处理，发现实际原生 core 后，为该实例的 `manager.add` 包装一次。每个 manager 用 WeakSet 标记，播放器重建时可适配新的 manager。
 
-第二个 `false` 表示不持久化用户设置。先清理一次，再在下一次 requestAnimationFrame 回调中清理一次，让原生动画时钟恢复后释放旧轨道。接口不存在、播放器重建中或用户原本关闭原生弹幕时跳过；异常只记录日志，不阻断恢复通知。
+- 真实后台只跳过新增的原生画面弹幕；官网 WebSocket 接收和右侧评论栏继续工作，也不清除已经在画面上的动画。
+- 前台真正添加弹幕前，若 core 处于运行状态，先调用其 `timeController.updateTime()`，再将有效的 renderTime/currentTime 同步到 manager。避免 rAF 在后台停止后，旧时钟与新消息时间相减，导致计算出过长动画、超大水平偏移或错误轨道。
+- 不调用 clear/resize/visible，不改用户的弹幕开关、样式、位置或已有动画；core 暂停时不强行推进其时钟。
+- 初始 SDK 尚未加载时每 250 ms 尝试安装，成功或累计 120 次后结束；内部结构不匹配时保留官网处理，不退回破坏性的清屏方案。
 
-这里清理的是 **B 站原生弹幕**。它与第 8 节“不在 resize 时取消正在滚动的抖音弹幕”是两套不同的逻辑，不应混用。
+适配依赖当前 B 站导出对象及 core/manager/timeController 结构，属于需要随站点改版验证的兼容层。真实后台期间的新评论可以留在右侧记录中，但不会被补画到滚动层；已正常结束的弹幕也不会为了切页而重新播放。
 
 ## 10. 分屏、离线承载与来源标识
 
@@ -321,7 +321,11 @@ LLS iframe 包装 RTCPeerConnection 构造器收集当前连接，每秒 getStat
 
 ## 13. 断流自动恢复
 
-所有恢复受默认开启的 `AUTO_RECOVER_ENABLED` 控制；关闭后取消已排的抖音覆盖播放器恢复定时器，并停止相应恢复动作，不关闭后台可见性保护。
+所有恢复受默认关闭的 `AUTO_RECOVER_ENABLED` 控制；只有保存值明确为 true 时启用。关闭后取消已排的抖音覆盖播放器恢复定时器，并停止相应恢复动作，不关闭后台可见性保护。
+
+状态文字（“监测中”“已关闭”等）支持鼠标悬停和键盘焦点查看历史。`recordAutoRecovery` 记录本页打开以来实际发起的 B 站软重载、无法调用重载、抖音同源重连及源页面刷新请求，包含时间、对象、原因、操作，最新的在最上方；超长记录可以在悬浮框内滚动。
+
+记录只在当前 B 站页面内存中保留。切换状态、开关功能、隐藏/重新打开面板不会清空，刷新页面或重新打开页面会重新开始；普通“监测中”和冷却轮询不产生记录。发起重载/重连不等于已恢复，发送抖音源页刷新请求也不等于确认对方执行，文字按实际操作说明，不虚报恢复成功。没有记录时明确显示暂无记录。
 
 ### 13.1 B 站原生播放器
 
@@ -352,6 +356,7 @@ LLS iframe 包装 RTCPeerConnection 构造器收集当前连接，每秒 getStat
 | 抖音源提取 / 节能弹窗关闭尝试 | 各 3 秒 |
 | 两站原生断流检测 | 各 2 秒 |
 | B 站联动 UI、统计、挂载检查 | 1 秒；无面板、无联动画面且无标签/弹幕需求时提前返回 |
+| B 站原生弹幕时钟适配安装 | 初始最多 120 次，每 250 ms；成功后停止尝试 |
 | 弹幕补读 / 滚动发射尝试 | 800 ms / 100 ms |
 | LLS 播放统计 | 1 秒；就绪轮询 100 ms，最多 120 次 |
 | 可用性测试采样 | 250 ms；逐条执行，不批量并发拉流 |
@@ -367,7 +372,7 @@ LLS iframe 包装 RTCPeerConnection 构造器收集当前连接，每秒 getStat
 - 文档选择器、前端 JSON 结构、私有消息字段和 B 站播放器接口均可能改版。解析失败通常保留旧缓存或返回未知；不能把缓存存在解释为实时在线。
 - B 站/抖音原生恢复尊重主动暂停，但覆盖播放器的进度恢复没有独立的“用户暂停”状态，持续暂停可能被重连逻辑拉起。
 - 显示/隐藏画面、隐藏标签页、关闭标签页是三种不同操作；只有销毁播放器或关掉页面才明确释放那一路媒体，布局隐藏不会自动停流。
-- 原生弹幕恢复可能在切回前台时短暂丢弃正在显示的旧原生弹幕，这是释放错误轨道的取舍；已关闭原生弹幕不应被重新开启。
+- 原生弹幕时钟适配不主动清屏；离开较久后原弹幕自然过期并非强制删除。后台接收评论与后台绘制画面是两件事，适配只抑制后者的新增操作。
 - 房间输入使用通用 URL 尾部提取和部分严格 B 站校验，尚无完整的输入校验/错误提示体系；短号/长号等价、抖音 SPA 换房间后的重初始化也未作完整归一化。
 
 ## 16. 为什么保留这些组件：拆解与消融
@@ -375,8 +380,9 @@ LLS iframe 包装 RTCPeerConnection 构造器收集当前连接，每秒 getStat
 | 去掉或替换的组件 | 失去的能力或已观察到的问题 | 当前选择 |
 | --- | --- | --- |
 | 整页后台保护 | 站点能重新直接感知隐藏；不能保证原来的后台播放/防降级目标 | 保留保护，用原生 getter 仅判断脚本自己的调度 |
-| B 站切回前台的轨道清理 | 旧原生弹幕可能长期占用顶部轨道，新弹幕排到较低位置 | 保留；不持久化修改用户设置 |
-| 只清理一次，不在首帧后处理 | 前一轮真实切换试验仍看到约 34 秒的异常动画时长 | 原生时钟推进一帧后再清理一次 |
+| 通过关闭/开启清理 B 站弹幕 | 会把正常切页时仍在滚动的弹幕一起清掉 | 已移除，保留现有节点和动画 |
+| 仅移除清屏，不同步原生时钟 | manager 时钟仍可能落后于新消息时间，产生超长水平偏移 | 前台真正添加弹幕前同步原生时间 |
+| 只同步时钟，仍在真实后台新增画面弹幕 | 对照中后台创建的多个动画切回时集中出现 | 后台接收评论但不新增不可见的画面弹幕 |
 | 用预计释放时间分配抖音轨道 | 后台停帧、变更尺寸时，预计时间与画面实际位置可能不一致 | 合并实际 DOM 入口占用判断，不清空所有活动动画 |
 | 独立 WSS，只旁听抖音网页 | 关闭抖音页后没有持续的消息生产者 | 保留只传消息的独立连接，不开隐藏网页 |
 | 仅按批次去重 | 官网旁听与直连属于不同批次，仍可重复同一消息 | 批次和房间+消息 ID 两级去重 |
@@ -407,10 +413,10 @@ LLS iframe 包装 RTCPeerConnection 构造器收集当前连接，每秒 getStat
 | 弹幕协议与传输 | `readDouyinProto`、`decodeDouyinChatFrame`、`observeDouyinChatSocket`、`encodeDouyinControl`、`createDouyinDirectClient` |
 | 公共媒体工具 | `normalizeStreamUrl`、`parseResolutionPair`、`formatShortResolution`、`formatFullResolution`、`detectDouyinCodec`、`normalizeCodecName`、`isAudioOnlyStream`、`describePlaybackFailure` |
 | 信令兼容 | `installLlsFetchFallback` |
-| 前后台 | `isPageReallyHidden`、`installPageVisibilityGuard`、内部 `resetBiliDanmaku` |
+| 前后台 | `isPageReallyHidden`、`installPageVisibilityGuard`、`installBiliDanmakuClockGuard` |
 | 抖音采集与恢复 | `extractDouyinStreams`、`tryPushStreams`、`getDouyinNativeVideo`、`saveDouyinMediaState`、`checkDouyinNativeRecovery`、`handleDouyinRefreshRequest`、`reloadPageForRecovery` |
 | B 站定位与恢复 | `getBiliVideoCandidates`、`isBiliVideoVisible`、`getBiliVideo`、`getActiveBiliVideo`、`hasBiliPlayerErrorPanel`、`softReloadBiliPlayer`、`tryRecoverBiliPlayer`、`checkBiliAutoRecovery` |
-| 面板 | `initUI`、`attachEventListeners`、`startHeartbeat`、`setAutoRecoverStatus`、`dismissBiliQualityLoginBanner` |
+| 面板 | `initUI`、`attachEventListeners`、`startHeartbeat`、`setAutoRecoverStatus`、`recordAutoRecovery`、`renderAutoRecoveryHistory`、`dismissBiliQualityLoginBanner` |
 | 源显示与测试 | `getStreamKey`、`getCurrentDouyinStreams`、`renderDouyinStreamOptions`、`markStreamPlayable/Unplayable`、`probeLlsStream`、`probeMediaStream`、`probeStream`、`shouldProbeStream`、`runStreamAvailabilityCheck` |
 | 正式播放与恢复 | `initPlayer`、`resetOverlayRecovery`、`requestDouyinSourceRefresh`、`scheduleOverlayRecoverySoon`、`recoverCurrentPlayback`、`handlePlaybackResume` |
 | 弹幕作用域与显示 | `ensureDouyinChat`、`stopDouyinChat`、`syncDanmakuRoomScope`、`primeLatestDanmakuBatch`、`getDanmakuBatchKey`、`rememberBatchKey`、`consumeDanmakuBatch`、`ensureDanmakuLayer`、`updateDanmakuLayer`、`launchNextDanmaku`、`resetScrollingDanmaku`、`clearDanmakuDisplay`、`recycleDanmakuNode` |
