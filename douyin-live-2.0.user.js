@@ -2115,11 +2115,11 @@
                     border-radius:0; padding:0; scrollbar-width:auto; }
                 #dl-stream-popup[hidden] { display:none; }
                 .dl-stream-heading { color:#aaa; background:transparent; padding:6px 5px; margin:0;
-                    font:13px/1.5 Arial,Microsoft YaHei,sans-serif; white-space:pre-line; }
+                    font:inherit; white-space:pre-line; }
                 .dl-stream-codec-group { display:grid; grid-template-columns:minmax(0,1fr) 25px; }
                 .dl-stream-option { display:block; width:100%; box-sizing:border-box; border:0; border-radius:0;
                     padding:6px 5px; background:transparent; color:#fff; cursor:pointer; text-align:left;
-                    font:14px/1.6 Arial,Microsoft YaHei,sans-serif; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+                    font:inherit; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
                 .dl-stream-option:hover,.dl-stream-option:focus-visible,
                 .dl-stream-option[aria-selected="true"] { background:#9ecbff; color:#192c40; outline:none; box-shadow:none; }
                 .dl-stream-codec-rail { display:flex; flex-direction:column; align-items:center; gap:10px;
@@ -2614,6 +2614,8 @@
             const trigger = document.getElementById('dl-stream-trigger');
             const popup = document.querySelector('#dual-live-panel #dl-stream-popup');
             const select = document.getElementById('dy-stream-select');
+            popup.style.font = window.getComputedStyle(select).font;
+            trigger.style.font = popup.style.font;
             // 面板的 backdrop-filter 会成为 fixed 定位的包含块，弹层直接挂 body 避免双重偏移。
             document.querySelectorAll('#dl-stream-popup').forEach(other => { if (other !== popup) other.remove(); });
             document.body.appendChild(popup);
