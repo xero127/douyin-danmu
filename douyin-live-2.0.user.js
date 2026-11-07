@@ -514,6 +514,15 @@
         return '';
     };
 
+    // 两端使用同一分组规则，已有缓存也按 FLV/LLS/HLS 内 H.264 在前显示。
+    const compareStreamTypeAndCodec = (a, b) => {
+        const formats = { flv: 0, lls: 1, hls: 2 };
+        const codecs = { h264: 0, h265: 1 };
+        return ((formats[String(a.format || '').toLowerCase()] ?? 3) -
+            (formats[String(b.format || '').toLowerCase()] ?? 3)) ||
+            ((codecs[normalizeCodecName(a.codec)] ?? 2) - (codecs[normalizeCodecName(b.codec)] ?? 2));
+    };
+
     // 隐藏B站小橙车提示浮窗
     GM_addStyle(`
         #shop-popover-vm,
@@ -771,17 +780,9 @@
 
                     // 排序规则：FLV -> LLS -> HLS；同格式内再按帧率、码率和编码排序。
                     extracted.sort((a, b) => {
-                    const formatRank = { flv: 0, lls: 1, hls: 2 };
-                    const aRank = formatRank[a.format] ?? 3;
-                    const bRank = formatRank[b.format] ?? 3;
-                    if (aRank !== bRank) return aRank - bRank;
+                    const groupOrder = compareStreamTypeAndCodec(a, b);
+                    if (groupOrder) return groupOrder;
                     const bothLls = a.format === 'lls' && b.format === 'lls';
-                    if (bothLls) {
-                        // 浏览器优先 H.264。
-                        const aH265 = a.codec === 'h265' ? 1 : 0;
-                        const bH265 = b.codec === 'h265' ? 1 : 0;
-                        if (aH265 !== bH265) return aH265 - bH265;
-                    }
                     // 帧率优先（60帧 > 45帧 > 30帧 > 未知0帧）
                     if (b.fps !== a.fps) return b.fps - a.fps;
                     // 前端未提供码率的未知源排在已知码率之后。
@@ -798,10 +799,6 @@
                         const bVolcLine = /[?&](?:volcSecret|volcTime)=/i.test(b.url) ? 1 : 0;
                         if (aVolcLine !== bVolcLine) return aVolcLine - bVolcLine;
                     }
-                    // 编码优先：H265 > H264
-                    let aIsH265 = (a.codec === 'h265') ? 1 : 0;
-                    let bIsH265 = (b.codec === 'h265') ? 1 : 0;
-                    if (aIsH265 !== bIsH265) return bIsH265 - aIsH265;
                     return 0;
                     });
 
@@ -2526,11 +2523,9 @@
             const streamMap = GM_getValue('DY_STREAM_MAP', {});
             const streamEntry = streamMap && streamMap[targetDyId];
             if (!streamEntry || !Array.isArray(streamEntry.streams)) return [];
-            const formatRank = { flv: 0, lls: 1, hls: 2 };
             return streamEntry.streams
                 .filter(stream => stream && typeof stream === 'object')
-                .sort((a, b) => (formatRank[String(a.format || '').toLowerCase()] ?? 3) -
-                    (formatRank[String(b.format || '').toLowerCase()] ?? 3));
+                .sort(compareStreamTypeAndCodec);
         };
 
         const renderDouyinStreamOptions = () => {
